@@ -1,0 +1,247 @@
+cachelab
+这里对应的是csapp第六章的内容了
+在进行实验前要安装valgrind
+partA
+模拟高速缓存结构，csim.c中给出了s,E,b,t，
+
+首先要了解内存访问轨迹，了解内存的大概组成
+在cache.h中用到getopt()解析命令行，解析输入的s,E,b,t四个参数。
+
+用到了valgrind
+操作符I 加载指令
+      L 加载数据
+	  S保存数据
+      M 加载数据后再保存
+实验主要进行的是数据的读写，所以不需要用到I，L和S作用相同，M的加载保存在相同地址
+执行指令
+#include <getopt.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <limits.h>
+#include "cachelab.h"
+
+//定义结构体
+typedef struct {
+	long tag; //标识
+	long time;  //时间戳
+	int valid_bit;  //有效位
+} line;
+
+//创建缓存
+line **initcache(int s, int E){
+	line **cache;
+	int i,j;
+	int S = 1 << s; 
+	cache = (line **)malloc(S*sizeof(line*));
+	if(cache==NULL) exit(1);
+	for(i=0;i<S;i++){
+		cache[i] = (line*)malloc(E*sizeof(line));
+		for(j=0;j<E;j++){
+			cache[i][j].tag=0;
+			cache[i][j].time=0;
+			cache[i][j].valid_bit=0;
+		}
+	}
+	return cache;
+}
+int main(int argc, char** argv){
+	int opt,s,E,b;
+	int S,tag;  //解析每一条对应的组号和标志
+	char *filename;
+	line **cache;
+	int hit_count=0, miss_count=0, eviction_count=0;
+	int isHit, isEvic;  //标记是否命中或驱逐
+	FILE *pfile;
+	char identifier;
+	unsigned long long addr;
+	int size;
+	int saveIndex;
+	long time_stamp=0;    //不断增加的时间戳
+	long min_time;  //LRU
+	int k;
+
+	//读取参数
+	while(-1 != (opt = getopt(argc, argv, "s:E:b:t:"))){
+		switch(opt){
+			case 's':
+				s = atoi(optarg);
+				break;
+			case 'E':
+				E = atoi(optarg);
+				break;
+			case 'b':
+				b = atoi(optarg);
+				break;
+			case 't':
+				filename = (char *)optarg;
+			default:
+				printf("WRONG\n");
+				break;
+		}
+	}
+
+	//初始化缓存
+	cache = initcache(s, E);
+
+	pfile=fopen(filename,"r");
+	while(fscanf(pfile," %c %llx,%d",&identifier,&addr,&size)>0){
+		if(identifier=='I')
+			continue;
+		addr=addr>>b;
+		S=addr&~(~0<<s);
+		tag=addr>>s;
+		isHit=0;
+		isEvic=0;
+		min_time=LONG_MAX;
+		for(k=0;k<E;k++){
+			line L=cache[S][k];
+		if(L.valid_bit==0){
+			saveIndex=k;
+			min_time=LONG_MIN;
+			isEvic=0;
+			continue;
+		}
+		if(L.tag!=tag){
+			if(min_time>L.time){
+				min_time=L.time;
+				saveIndex=k;
+				isEvic=1;
+			}
+			continue;
+		}
+		saveIndex=k;
+		isHit=1;
+		break;
+	}
+	cache[S][saveIndex].time=time_stamp;
+	time_stamp+=1;
+	if(identifier=='M')
+		hit_count+=1;
+	if(isHit){
+	hit_count+=1;
+	continue;
+	}
+	miss_count+=1;
+	if(isEvic)
+		eviction_count+=1;
+	cache[S][saveIndex].valid_bit=1;
+	cache[S][saveIndex].tag=tag;
+	}
+	free(cache);
+	printSummary(hit_count,miss_count,eviction_count);
+	return 0;
+}
+	
+partB
+矩阵转置，目标是增大hit数，减小miss数
+将数组中的元素占用高速缓存块的情况标志出来，cache的块大小是32，而int是8，8*8=64，刚好占用两个块。相当于保存了A[0][0]~A[0][7],用数据块来存储B[0][0]~B[7][0],则需要8个高速缓存行。B[0][0]~B[0][7]和B[1][0]~B[1][7]之间间隔3个高速缓存行。最简单的方法是A按行读，B按列写，但是这样会造成许多miss，
+32*32
+除了在对角线上的块之外，其他关于对角线对称的块中无相同的set，由某个不在主对角线上的块转置到对应块中所涉及到的setA.不会先被A用再被B用。每个小块按行读A，按列读B,这样A.B中8*8矩阵的第一列都可以miss，综合下来就是对角线和8*8矩阵的第一列miss
+void transpose_submit(int M, int N, int A[N][M], int B[M][N])
+{
+	int i,j,k,a1,a2,a3,a4,a5,a6,a7,a8;
+	for(i=0;i<M;i+=8){
+		for(j=0;j<N;j+=8){
+			for(k=i;k<i+8;k++){
+				a1=A[k][j];
+				a2=A[k][j+1];
+				a3=A[k][j+2];
+				a4=A[k][j+3];
+				a5=A[k][j+4];
+				a6=A[k][j+5];
+				a7=A[k][j+6];
+				a8=A[k][j+7];
+				B[j][k]=a1;
+				B[j+1][k]=a2;
+				B[j+2][k]=a3;
+				B[j+3][k]=a4;
+				B[j+4][k]=a5;
+				B[j+5][k]=a6;
+				B[j+6][k]=a7;
+				B[j+7][k]=a8;
+
+			}
+		}
+	}
+}
+
+
+
+64*64
+
+每一列从上到下以4为周期重复，转置方式相当于左下角的数转置到右上角去
+int i,j,k,a1,a2,a3,a4,a5,a6,a7,a8;
+	
+		if(M==64&&N==64){
+			for(j=0;j<64;j+=8){
+				for(i=0;i<64;i+=8){
+					for(k=0;k<i+4;k++){
+						a1=A[k][j];
+						a2=A[k][j+1];
+						a3=A[k][j+2];
+						a4=A[k][j+3];
+						a5=A[k][j+4];
+						a6=A[k][j+5];
+						a7=A[k][j+6];
+						a8=A[k][j+7];
+						B[j][k]=a1;
+						B[j+1][k]=a2;
+						B[j+2][k]=a3;
+						B[j+3][k]=a4;
+						B[j+4][k]=a5;
+						B[j+5][k]=a6;
+						B[j+6][k]=a7;
+						B[j+7][k]=a8;
+
+					}
+					for(k=j;k<j+4;k++){
+						a1=B[k][i+4];
+						a2=B[k][i+5];	
+						a3=B[k][i+6];	
+						a4=B[k][i+7];	
+						a5=A[i+4][k];
+						a6=A[i+5][k];
+						a7=A[i+6][k];
+						a8=A[i+7][k];
+						B[k][i+4]=a5;
+						B[k][i+5]=a6;
+						B[k][i+6]=a7;
+						B[k][i+7]=a8;
+						B[k+4][i]=a1;
+						B[k+4][i+1]=a2;
+						B[k+4][i+2]=a3;
+						B[k+4][i+3]=a4;
+	
+
+					}
+					for(k=j+4;k<j+8;k++){
+						a5=A[i+4][k];
+						a6=A[i+5][k];
+						a7=A[i+6][k];
+						a8=A[i+7][k];
+						B[k][i+4]=a5;
+						B[k][i+5]=a6;
+						B[k][i+6]=a7;
+						B[k][i+7]=a8;
+					}
+
+				}
+			}
+		}
+
+61*67
+行列数不规则，不是8的倍数，不能再采用8*8的矩阵，这里就是纯试，后来得知17*17最好，17*17=1950这四层循环复刻就出来了
+int i,j,k,a1,m;
+	if(M==61&&N==67){
+	for(j=0;j<61;j+=17){
+		for(i=0;i<67;i+=17){
+			for(k=i;(k<i+17)&&(k<67);k++{
+				for(m=j;(m<j+17)&&(m<61);m++){
+					a1=A[k][m];
+					B[m][k]=a1;
+				}
+			}
+		}
+
+	}
+
